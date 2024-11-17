@@ -41,16 +41,11 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
   const isPlaying = playerState === "playing";
   const [albumArt, setAlbumArt] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
-	const [imageError, setImageError] = React.useState(false);
-
-  // Replace these with your actual credentials
-const { clientId, clientSecret } = SPOTIFY_CONFIG;
+  const { clientId, clientSecret } = SPOTIFY_CONFIG;
 
   const fetchAlbumArt = React.useCallback(async () => {
     try {
       setLoading(true);
-      
-      // Get track ID from Spotify
       const trackId = await Uebersicht.run(`
         osascript -e '
           tell application "Spotify"
@@ -59,37 +54,36 @@ const { clientId, clientSecret } = SPOTIFY_CONFIG;
       `);
       
       const cleanTrackId = Utils.cleanupOutput(trackId).split(':')[2];
-      
-      // Get access token
-			const token = await getSpotifyToken(clientId, clientSecret);
+      const token = await getSpotifyToken(clientId, clientSecret);
       
       if (!token) {
-        throw new Error('Failed to get Spotify access token');
+        setLoading(false);
+        return;
       }
 
-      // Use token to fetch track info
       const response = await fetch(`https://api.spotify.com/v1/tracks/${cleanTrackId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       
+      if (!response.ok) {
+        throw new Error('Failed to fetch track info');
+      }
+
       const data = await response.json();
-      
-      // Get the largest available album art
-      const artworkUrl = data.album.images[0].url;
-      setAlbumArt(artworkUrl);
+      setAlbumArt(data.album.images[0]?.url || null);
     } catch (error) {
       console.error('Failed to fetch album art:', error);
       setAlbumArt(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clientId, clientSecret]);
 
   React.useEffect(() => {
     fetchAlbumArt();
-  }, [fetchAlbumArt, trackName]); // Refetch when track changes
+  }, [fetchAlbumArt, trackName]);
 
   const handlePlay = () => {
     togglePlay(!isPlaying);
@@ -106,24 +100,34 @@ const { clientId, clientSecret } = SPOTIFY_CONFIG;
     getSpotify();
   };
 
+  const renderAlbumArt = () => {
+    if (loading) {
+      return <div className="spotify-popup__album-art-loading" />;
+    }
+    
+    if (!albumArt) {
+      return (
+        <div className="spotify-popup__album-art-fallback">
+          <Icons.Music />
+        </div>
+      );
+    }
+
+    return (
+      <img 
+        src={albumArt} 
+        alt={`${trackName} album art`} 
+        onError={() => setAlbumArt(null)} 
+      />
+    );
+  };
+
   return (
     <div className="spotify-popup">
       <div className="spotify-popup__overlay" onClick={onClose} />
       <div className="spotify-popup__content">
         <div className="spotify-popup__album-art">
-          {loading ? (
-            <div className="spotify-popup__album-art-loading" />
-          ) : albumArt && !imageError ? (
-            <img 
-              src={albumArt} 
-              alt={`${trackName} album art`} 
-              onError={() => setImageError(true)}
-            />
-          ) : (
-            <div className="spotify-popup__album-art-fallback">
-              <Icons.Music />
-            </div>
-          )}
+          {renderAlbumArt()}
         </div>
         <div className="spotify-popup__info">
           <div className="spotify-popup__track">{trackName}</div>
