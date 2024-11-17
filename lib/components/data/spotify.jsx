@@ -6,6 +6,7 @@ import useServerSocket from "../../hooks/use-server-socket";
 import { useSimpleBarContext } from "../simple-bar-context.jsx";
 import * as Icons from "../icons/icons.jsx";
 import * as Utils from "../../utils";
+import { SPOTIFY_CONFIG } from "../../config.js";
 
 export { spotifyStyles as styles } from "../../styles/components/data/spotify";
 
@@ -13,11 +14,145 @@ const { React } = Uebersicht;
 
 const DEFAULT_REFRESH_FREQUENCY = 10000;
 
+// Add this function at the top level
+const getSpotifyToken = async (clientId, clientSecret) => {
+  const basicAuth = btoa(`${clientId}:${clientSecret}`);
+  
+  try {
+    const response = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials'
+    });
+    
+    const data = await response.json();
+    return data.access_token;
+  } catch (error) {
+    console.error('Error getting Spotify token:', error);
+    return null;
+  }
+};
+
+const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
+  const { playerState, trackName, artistName } = state;
+  const isPlaying = playerState === "playing";
+  const [albumArt, setAlbumArt] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+	const [imageError, setImageError] = React.useState(false);
+
+  // Replace these with your actual credentials
+const { clientId, clientSecret } = SPOTIFY_CONFIG;
+
+  const fetchAlbumArt = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      
+      // Get track ID from Spotify
+      const trackId = await Uebersicht.run(`
+        osascript -e '
+          tell application "Spotify"
+            return id of current track
+          end tell'
+      `);
+      
+      const cleanTrackId = Utils.cleanupOutput(trackId).split(':')[2];
+      
+      // Get access token
+			const token = await getSpotifyToken(clientId, clientSecret);
+      
+      if (!token) {
+        throw new Error('Failed to get Spotify access token');
+      }
+
+      // Use token to fetch track info
+      const response = await fetch(`https://api.spotify.com/v1/tracks/${cleanTrackId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      const data = await response.json();
+      
+      // Get the largest available album art
+      const artworkUrl = data.album.images[0].url;
+      setAlbumArt(artworkUrl);
+    } catch (error) {
+      console.error('Failed to fetch album art:', error);
+      setAlbumArt(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchAlbumArt();
+  }, [fetchAlbumArt, trackName]); // Refetch when track changes
+
+  const handlePlay = () => {
+    togglePlay(!isPlaying);
+    getSpotify();
+  };
+
+  const handleNext = () => {
+    Uebersicht.run(`osascript -e 'tell application "Spotify" to Next Track'`);
+    getSpotify();
+  };
+
+  const handlePrev = () => {
+    Uebersicht.run(`osascript -e 'tell application "Spotify" to Previous Track'`);
+    getSpotify();
+  };
+
+  return (
+    <div className="spotify-popup">
+      <div className="spotify-popup__overlay" onClick={onClose} />
+      <div className="spotify-popup__content">
+        <div className="spotify-popup__album-art">
+          {loading ? (
+            <div className="spotify-popup__album-art-loading" />
+          ) : albumArt && !imageError ? (
+            <img 
+              src={albumArt} 
+              alt={`${trackName} album art`} 
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            <div className="spotify-popup__album-art-fallback">
+              <Icons.Music />
+            </div>
+          )}
+        </div>
+        <div className="spotify-popup__info">
+          <div className="spotify-popup__track">{trackName}</div>
+          <div className="spotify-popup__artist">{artistName}</div>
+        </div>
+        <div className="spotify-popup__controls">
+          <button onClick={handlePrev} title="Previous">
+            <Icons.Previous />
+          </button>
+          <button onClick={handlePlay} title={isPlaying ? "Pause" : "Play"}>
+            {isPlaying ? <Icons.Playing /> : <Icons.Paused />}
+          </button>
+          <button onClick={handleNext} title="Next">
+            <Icons.Next />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const Widget = React.memo(() => {
   const { displayIndex, settings } = useSimpleBarContext();
   const { widgets, spotifyWidgetOptions } = settings;
   const { spotifyWidget } = widgets;
   const { refreshFrequency, showSpecter, showOnDisplay } = spotifyWidgetOptions;
+  
+  // Add this new state for controlling popup visibility
+  const [showPopup, setShowPopup] = React.useState(false);
 
   const refresh = React.useMemo(
     () =>
@@ -84,9 +219,9 @@ export const Widget = React.memo(() => {
 
   const onClick = (e) => {
     Utils.clickEffect(e);
-    togglePlay(!isPlaying);
-    getSpotify();
+    setShowPopup(true);
   };
+
   const onRightClick = (e) => {
     Utils.clickEffect(e);
     Uebersicht.run(`osascript -e 'tell application "Spotify" to Next Track'`);
@@ -103,16 +238,25 @@ export const Widget = React.memo(() => {
   });
 
   return (
-    <DataWidget.Widget
-      classes={classes}
-      Icon={Icon}
-      onClick={onClick}
-      onRightClick={onRightClick}
-      onMiddleClick={onMiddleClick}
-      showSpecter={showSpecter && isPlaying}
-    >
-      {label}
-    </DataWidget.Widget>
+    <>
+      <DataWidget.Widget
+        classes={classes}
+        Icon={Icon}
+        onClick={onClick}
+        onRightClick={onRightClick}
+        onMiddleClick={onMiddleClick}
+        showSpecter={showSpecter && isPlaying}
+      >
+        {label}
+      </DataWidget.Widget>
+      {showPopup && (
+        <SpotifyPopup
+          state={state}
+          onClose={() => setShowPopup(false)}
+          getSpotify={getSpotify}
+        />
+      )}
+    </>
   );
 });
 
