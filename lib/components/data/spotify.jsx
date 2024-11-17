@@ -43,7 +43,17 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
   const [loading, setLoading] = React.useState(true);
   const { clientId, clientSecret } = SPOTIFY_CONFIG;
 
+  const mounted = React.useRef(true);
+
+  React.useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const fetchAlbumArt = React.useCallback(async () => {
+    if (!mounted.current) return;
+    
     try {
       setLoading(true);
       const trackId = await Uebersicht.run(`
@@ -53,9 +63,12 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
           end tell'
       `);
       
+      if (!mounted.current) return;
+
       const cleanTrackId = Utils.cleanupOutput(trackId).split(':')[2];
       const token = await getSpotifyToken(clientId, clientSecret);
       
+      if (!mounted.current) return;
       if (!token) {
         setLoading(false);
         return;
@@ -67,17 +80,22 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
         }
       });
       
+      if (!mounted.current) return;
       if (!response.ok) {
         throw new Error('Failed to fetch track info');
       }
 
       const data = await response.json();
-      setAlbumArt(data.album.images[0]?.url || null);
+      if (mounted.current) {
+        setAlbumArt(data.album.images[0]?.url || null);
+        setLoading(false);
+      }
     } catch (error) {
       console.error('Failed to fetch album art:', error);
-      setAlbumArt(null);
-    } finally {
-      setLoading(false);
+      if (mounted.current) {
+        setAlbumArt(null);
+        setLoading(false);
+      }
     }
   }, [clientId, clientSecret]);
 
@@ -85,10 +103,17 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
     fetchAlbumArt();
   }, [fetchAlbumArt, trackName]);
 
-  const handlePlay = () => {
-    togglePlay(!isPlaying);
-    getSpotify();
-  };
+	const handlePlay = async () => {
+		try {
+			const state = isPlaying ? "pause" : "play";
+			await Uebersicht.run(`osascript -e 'tell application "Spotify" to ${state}'`);
+			if (mounted.current) {
+				getSpotify();
+			}
+		} catch (error) {
+			console.error('Failed to toggle playback:', error);
+		}
+	};
 
   const handleNext = () => {
     Uebersicht.run(`osascript -e 'tell application "Spotify" to Next Track'`);
