@@ -41,21 +41,35 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
   const isPlaying = playerState === "playing";
   const [albumArt, setAlbumArt] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
   const { clientId, clientSecret } = SPOTIFY_CONFIG;
 
   const mounted = React.useRef(true);
+  const controller = React.useRef(null);
 
+  // Proper cleanup
   React.useEffect(() => {
     return () => {
       mounted.current = false;
+      if (controller.current) {
+        controller.current.abort();
+      }
     };
   }, []);
 
   const fetchAlbumArt = React.useCallback(async () => {
     if (!mounted.current) return;
     
+    // Cancel any in-flight requests
+    if (controller.current) {
+      controller.current.abort();
+    }
+    controller.current = new AbortController();
+    
     try {
       setLoading(true);
+      setError(null);
+
       const trackId = await Uebersicht.run(`
         osascript -e '
           tell application "Spotify"
@@ -70,14 +84,14 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
       
       if (!mounted.current) return;
       if (!token) {
-        setLoading(false);
-        return;
+        throw new Error('Failed to get Spotify token');
       }
 
       const response = await fetch(`https://api.spotify.com/v1/tracks/${cleanTrackId}`, {
         headers: {
           'Authorization': `Bearer ${token}`
-        }
+        },
+        signal: controller.current.signal
       });
       
       if (!mounted.current) return;
@@ -91,8 +105,11 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
         setLoading(false);
       }
     } catch (error) {
+      if (error.name === 'AbortError') return;
+      
       console.error('Failed to fetch album art:', error);
       if (mounted.current) {
+        setError(error.message);
         setAlbumArt(null);
         setLoading(false);
       }
@@ -147,31 +164,48 @@ const SpotifyPopup = React.memo(({ state, onClose, getSpotify }) => {
     );
   };
 
-  return (
-    <div className="spotify-popup">
-      <div className="spotify-popup__overlay" onClick={onClose} />
-      <div className="spotify-popup__content">
-        <div className="spotify-popup__album-art">
-          {renderAlbumArt()}
-        </div>
-        <div className="spotify-popup__info">
-          <div className="spotify-popup__track">{trackName}</div>
-          <div className="spotify-popup__artist">{artistName}</div>
-        </div>
-        <div className="spotify-popup__controls">
-          <button onClick={handlePrev} title="Previous">
-            <Icons.Previous />
-          </button>
-          <button onClick={handlePlay} title={isPlaying ? "Pause" : "Play"}>
-            {isPlaying ? <Icons.Playing /> : <Icons.Paused />}
-          </button>
-          <button onClick={handleNext} title="Next">
-            <Icons.Next />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+	const renderContent = () => {
+			if (error) {
+				return (
+					<div className="spotify-popup__error">
+						<Icons.Warning />
+						<span>Failed to load album art</span>
+					</div>
+				);
+			}
+
+			return (
+				<>
+					<div className="spotify-popup__album-art">
+						{renderAlbumArt()}
+					</div>
+					<div className="spotify-popup__info">
+						<div className="spotify-popup__track">{trackName}</div>
+						<div className="spotify-popup__artist">{artistName}</div>
+					</div>
+					<div className="spotify-popup__controls">
+						<button onClick={handlePrev} title="Previous">
+							<Icons.Previous />
+						</button>
+						<button onClick={handlePlay} title={isPlaying ? "Pause" : "Play"}>
+							{isPlaying ? <Icons.Playing /> : <Icons.Paused />}
+						</button>
+						<button onClick={handleNext} title="Next">
+							<Icons.Next />
+						</button>
+					</div>
+				</>
+			);
+		};
+
+	return (
+			<div className="spotify-popup">
+				<div className="spotify-popup__overlay" onClick={onClose} />
+				<div className="spotify-popup__content">
+					{renderContent()}
+				</div>
+			</div>
+		);
 });
 
 export const Widget = React.memo(() => {
@@ -279,11 +313,13 @@ export const Widget = React.memo(() => {
         {label}
       </DataWidget.Widget>
       {showPopup && (
-        <SpotifyPopup
-          state={state}
-          onClose={() => setShowPopup(false)}
-          getSpotify={getSpotify}
-        />
+        <React.Suspense fallback={<DataWidgetLoader.Widget className="spotify-popup" />}>
+          <SpotifyPopup
+            state={state}
+            onClose={() => setShowPopup(false)}
+            getSpotify={getSpotify}
+          />
+        </React.Suspense>
       )}
     </>
   );
